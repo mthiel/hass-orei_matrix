@@ -46,6 +46,20 @@ class OreiMatrixClient:
         if not self._writer or self._writer.is_closing():
             await self.connect()
 
+    async def _empty_read_buffer(self):
+        if self._reader is None:
+            raise RuntimeError("Connection not established")
+
+        try:
+            while True:
+                data = await asyncio.wait_for(
+                    self._reader.read(1024), timeout=0.1
+                )
+                if not data:
+                    break
+        except asyncio.TimeoutError:
+            pass
+
     # -----------------------
     # Core command handling
     # -----------------------
@@ -59,6 +73,7 @@ class OreiMatrixClient:
                 raise RuntimeError("Connection not established")
 
             try:
+                await self._empty_read_buffer()
                 _LOGGER.debug("Sending command: %s", cmd)
                 self._writer.write((cmd + "\r\n").encode("ascii"))
                 await self._writer.drain()
@@ -88,13 +103,14 @@ class OreiMatrixClient:
                 lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
                 _LOGGER.debug("Parsed lines: %s", lines)
 
-                # Remove echoed command and banner
+                # Remove echoed command and banner and random E00
                 cleaned = []
                 for line in lines:
                     if (
                         line.startswith(cmd.split()[0]) or
                         line.startswith("********") or
                         line.startswith("FW Version") or
+                        line.startswith("E00") or
                         line == ">" or
                         "Welcome" in line
                     ):
