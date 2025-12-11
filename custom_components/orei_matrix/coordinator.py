@@ -4,6 +4,14 @@ from asyncio import StreamReader, StreamWriter
 
 _LOGGER = logging.getLogger(__name__)
 
+def _parse_edid_from_response(res: str) -> str | None:
+    """Parse an EDID status response into an EDID description"""
+    parts = res.split(":")
+    if len(parts) < 2:
+        _LOGGER.warning("Could not parse EDID from response: %s", res)
+        return None
+    return parts[1].upper()
+
 class OreiMatrixClient:
     """Async client for controlling Orei HDMI Matrix via Telnet."""
 
@@ -260,6 +268,29 @@ class OreiMatrixClient:
                 return None
         return response
 
+    async def get_input_edid(self, input_id: int) -> str | None:
+        """Get the EDID for an input."""
+        res = await self._send_command(f"r input {input_id} EDID!")
+        return _parse_edid_from_response(res)
+
+    async def get_input_edids(self) -> dict[int, str | None]:
+        """Get the EDID for all inputs."""
+        results = await self._send_command_multiple(f"r input 0 EDID!")
+        response = {}
+
+        for res in results:
+            parts = res.lower().replace(";", " ").split()
+            input_id = None
+
+            try:
+                for i, token in enumerate(parts):
+                    if token in ("input", "in" and i + 1 < len(parts)):
+                        input_id = int(parts[i + 1])
+                response[input_id] = _parse_edid_from_response(res)
+            except ValueError:
+                _LOGGER.warning("Could not parse integers from response: %s", res)
+        return response
+
     async def set_cec_in(self, input_id: int, command: str):
         """Send a CEC command to the input."""
         await self._send_command(f"s cec in {input_id} {command}!")
@@ -271,3 +302,7 @@ class OreiMatrixClient:
     async def set_output_source(self, input_id: int, output_id: int):
         """Assign an input to an output."""
         await self._send_command(f"s in {input_id} av out {output_id}!")
+
+    async def set_input_edid(self, input_id: int, edid_id: int):
+        """Change the EDID for an input."""
+        await self._send_command(f"s input {input_id} EDID {edid_id}!")
