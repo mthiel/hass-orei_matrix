@@ -69,6 +69,6 @@ class OreiMatrixInputEDID(CoordinatorEntity, SelectEntity):
             _LOGGER.warning("Could not find index of %s to set new EDID")
             return None
 
-        await self._client.set_input_edid(self, self._input_id, edid)
+        await self._client.set_input_edid(self._input_id, edid)
         await self.coordinator.async_request_refresh()
         _LOGGER.info("Changed EDID of %s to %s", self.name, option)
