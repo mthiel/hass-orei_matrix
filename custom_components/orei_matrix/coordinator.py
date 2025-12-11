@@ -13,6 +13,7 @@ class OreiMatrixClient:
         self._reader: StreamReader | None = None
         self._writer: StreamWriter | None = None
         self._lock = asyncio.Lock()
+        self._type = ""
 
     # -----------------------
     # Connection management
@@ -46,6 +47,20 @@ class OreiMatrixClient:
         if not self._writer or self._writer.is_closing():
             await self.connect()
 
+    async def _empty_read_buffer(self):
+        if self._reader is None:
+            raise RuntimeError("Connection not established")
+
+        try:
+            while True:
+                data = await asyncio.wait_for(
+                    self._reader.read(1024), timeout=0.1
+                )
+                if not data:
+                    break
+        except asyncio.TimeoutError:
+            pass
+
     # -----------------------
     # Core command handling
     # -----------------------
@@ -59,6 +74,7 @@ class OreiMatrixClient:
                 raise RuntimeError("Connection not established")
 
             try:
+                await self._empty_read_buffer()
                 _LOGGER.debug("Sending command: %s", cmd)
                 self._writer.write((cmd + "\r\n").encode("ascii"))
                 await self._writer.drain()
@@ -88,13 +104,14 @@ class OreiMatrixClient:
                 lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
                 _LOGGER.debug("Parsed lines: %s", lines)
 
-                # Remove echoed command and banner
+                # Remove echoed command and banner and random E00
                 cleaned = []
                 for line in lines:
                     if (
                         line.startswith(cmd.split()[0]) or
                         line.startswith("********") or
                         line.startswith("FW Version") or
+                        line.startswith("E00") or
                         line == ">" or
                         "Welcome" in line
                     ):
@@ -120,7 +137,8 @@ class OreiMatrixClient:
 
     async def get_type(self) -> str:
         """Return matrix model type."""
-        return await self._send_command("r type!")
+        self._type = await self._send_command("r type!")
+        return self._type
 
     async def get_power(self) -> bool:
         """Return True if matrix power is ON."""
@@ -134,7 +152,11 @@ class OreiMatrixClient:
 
     async def get_output_source(self, output_id: int):
         """Get the current input assigned to a given output."""
-        res = await self._send_command(f"r av out {output_id}!")
+        if self._type == "4x4 hdmi2.1 matrix":
+            command = f"r output {output_id} in source!"
+        else:
+            command = f"r av out {output_id}!"
+        res = await self._send_command(command)
         _LOGGER.debug("Parsing output source response: %s", res)
 
         res = res.lower().replace("->", " -> ").replace(":", " ")
@@ -143,8 +165,12 @@ class OreiMatrixClient:
 
         try:
             for i, token in enumerate(parts):
-                if token in ("input", "in") and i + 1 < len(parts):
-                    input_id = int(parts[i + 1])
+                if self._type == "4x4 hdmi2.1 matrix":
+                    if token.startswith("in"):
+                        input_id = int(token[-1])
+                else:
+                    if token in ("input", "in") and i + 1 < len(parts):
+                        input_id = int(parts[i + 1])
         except ValueError:
             _LOGGER.warning("Could not parse integers from response: %s", res)
             return None
@@ -153,7 +179,11 @@ class OreiMatrixClient:
 
     async def get_output_sources(self):
         """Get the current input assigned to a given output."""
-        results = await self._send_command_multiple(f"r av out 0!")
+        if self._type == "4x4 hdmi2.1 matrix":
+            command = f"r output 0 in source!"
+        else:
+            command = f"r av out 0!"
+        results = await self._send_command_multiple(command)
         response = {}
 
         for res in results:
@@ -164,10 +194,16 @@ class OreiMatrixClient:
 
             try:
                 for i, token in enumerate(parts):
-                    if token in ("output", "out") and i + 1 < len(parts):
-                        output_id = int(parts[i + 1])
-                    if token in ("input", "in") and i + 1 < len(parts):
-                        input_id = int(parts[i + 1])
+                    if self._type == "4x4 hdmi2.1 matrix":
+                        if token.startswith("out"):
+                            output_id = int(token[-1])
+                        if token.startswith("in"):
+                            input_id = int(token[-1])
+                    else:
+                        if token in ("output", "out") and i + 1 < len(parts):
+                            output_id = int(parts[i + 1])
+                        if token in ("input", "in") and i + 1 < len(parts):
+                            input_id = int(parts[i + 1])
                 response[output_id] = input_id
             except ValueError:
                 _LOGGER.warning("Could not parse integers from response: %s", res)
